@@ -1,11 +1,14 @@
-from pykd import typedVar, typedVarList, module, addr64
+from pykd import typedVar, typedVarList, module, loadWChars
 from enum import Enum
 from typing import *
 from dataclasses import dataclass
+from functools import cache
 
 # Cache types for to prevent redundant lookups. These fields should not be accessed directly.
 _INTERNAL_FLT_MGR: Any = module("fltmgr")
 _INTERNAL_FLT_OBJECT: Any = _INTERNAL_FLT_MGR.type("_FLT_OBJECT")
+_INTERNAL_FLT_OBJECT_PRIMARY_LINK_OFFSET: int = 0x10
+
 _INTERNAL_FLT_VOLUME: Any = _INTERNAL_FLT_MGR.type("_FLT_VOLUME")
 
 _INTERNAL_NT: Any = module("nt")
@@ -191,8 +194,15 @@ class FLT_VOLUME:
         FLT_FSTYPE_OPENAFS = 29
         FLT_FSTYPE_CIMFS = 30
 
+    class _CALLBACK_NODE_FLAGS(Enum):
+        CBNFL_SKIP_PAGING_IO = 1
+        CBNFL_SKIP_CACHED_IO = 2
+        CBNFL_USE_NAME_CALLBACK_EX = 4
+        CBNFL_SKIP_NON_DASD_IO = 8
+        CBNFL_SKIP_NON_CACHED_NON_PAGING_IO = 16
+
     def __init__(self, address: int) -> None:
-        self._flt: typedVar(_INTERNAL_FLT_VOLUME, address)
+        self._flt: typedVar = typedVar(_INTERNAL_FLT_VOLUME, address)
         self._Base: FLT_OBJECT = FLT_OBJECT(int(self._flt.Base))
 
     @property
@@ -227,6 +237,70 @@ class FLT_VOLUME:
     def Frame(self) -> int:
         return int(self._flt.Frame)
 
+    @property
+    def DeviceName(self) -> int:
+        return int(self._flt.DeviceName)
+
+    @property
+    def GuidName(self) -> int:
+        return int(self._flt.GuidName)
+
+    @property
+    def CDODeviceName(self) -> int:
+        return int(self._flt.CDODeviceName)
+
+    @property
+    def CDODriverName(self) -> int:
+        return int(self._flt.CDODriverName)
+
+    @property
+    def InstanceList(self) -> int:
+        return int(self._flt.InstanceList)
+
+    @property
+    def Callbacks(self) -> int:
+        return int(self._flt.Callbacks)
+
+    @property
+    def ContextLock(self) -> int:
+        return int(self._flt.ContextLock)
+
+    @property
+    def VolumeContexts(self) -> int:
+        return int(self._flt.VolumeContexts)
+
+    @property
+    def StreamListCtrls(self) -> int:
+        return int(self._flt.FileListCtrls)
+
+    @property
+    def FileListCtrls(self) -> int:
+        return int(self._flt.FileListCtrls)
+
+    @property
+    def NameCacheCtrl(self) -> int:
+        return int(self._flt.NameCacheCtrl)
+
+    @property
+    def MountNotifyLock(self) -> int:
+        return int(self._flt.MountNotifyLock)
+
+    @property
+    def TargetedOpenActiveCount(self) -> int:
+        return int(self._flt.TargetedOpenActiveCount)
+
+    @property
+    def TxVolContextListLock(self) -> int:
+        return int(self._flt.TxVolContextListLock)
+
+    @property
+    def TxVolContexts(self) -> int:
+        return int(self._flt.TxVolContexts)
+
+    @property
+    def SupportedFeatures(self) -> int:
+        return int(self._flt.SupportedFeatures)
+
     def get_base(self) -> FLT_OBJECT:
         return self._Base
 
@@ -240,70 +314,115 @@ class FLT_VOLUME:
             return FLT_VOLUME(self.VolumeInNextFrame)
         return None
 
+    def get_device_name(self) -> str:
+        name: typedVar = typedVar(_INTERNAL_NT_UNICODE_STRING, self.DeviceName)
+        return f"{loadWChars(name.Buffer, name.Length * 2)}"
+
+    def get_guid_name(self) -> str:
+        name: typedVar = typedVar(_INTERNAL_NT_UNICODE_STRING, self.GuidName)
+        return f"{loadWChars(name.Buffer, name.Length * 2)}"
+
+    def get_cdo_device_name(self) -> str:
+        name: typedVar = typedVar(_INTERNAL_NT_UNICODE_STRING, self.CDODeviceName)
+        return f"{loadWChars(name.Buffer, name.Length * 2)}"
+
+    def get_cdo_driver_name(self) -> str:
+        name: typedVar = typedVar(_INTERNAL_NT_UNICODE_STRING, self.CDODriverName)
+        return f"{loadWChars(name.Buffer, name.Length * 2)}"
+
+    def get_instance_list(self) -> List["FLT_INSTANCE"]:
+        return [
+            FLT_INSTANCE(int(obj) - _INTERNAL_FLT_OBJECT_PRIMARY_LINK_OFFSET)
+            for obj in typedVarList(
+                self._flt.InstanceList.rList, "nt!_LIST_ENTRY", "Flink"
+            )
+        ]
+
+    def get_callbacks(self) -> List[Tuple[int, int]]:
+        return [
+            (int(op_l), int(op_f))
+            for op_l, op_f in zip(
+                self._flt.Callbacks.OperationLists, self._flt.Callbacks.OperationFlags
+            )
+        ]
+
+    def get_volume_contexts(self) -> None:
+        raise NotImplementedError("unimplemented")
+
+    def get_tx_vol_contexts(self) -> None:
+        raise NotImplementedError("unimplemented")
+
     def get_fs_type(self) -> _FLT_FILESYSTEM_TYPE:
-        match (self.FileSystemType):
-            case self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_UNKNOWN.value:
-                return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_UNKNOWN
-            case self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_RAW.value:
-                return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_RAW
-            case self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_NTFS.value:
-                return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_NTFS
-            case self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_FAT.value:
-                return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_FAT
-            case self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_CDFS.value:
-                return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_CDFS
-            case self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_UDFS.value:
-                return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_UDFS
-            case self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_LANMAN.value:
-                return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_LANMAN
-            case self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_WEBDAV.value:
-                return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_WEBDAV
-            case self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_RDPDR.value:
-                return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_RDPDR
-            case self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_NFS.value:
-                return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_NFS
-            case self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_MS_NETWARE.value:
-                return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_MS_NETWARE
-            case self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_NETWARE.value:
-                return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_NETWARE
-            case self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_BSUDF.value:
-                return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_BSUDF
-            case self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_MUP.value:
-                return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_MUP
-            case self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_RSFX.value:
-                return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_RSFX
-            case self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_ROXIO_UDF1.value:
-                return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_ROXIO_UDF1
-            case self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_ROXIO_UDF2.value:
-                return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_ROXIO_UDF2
-            case self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_ROXIO_UDF3.value:
-                return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_ROXIO_UDF3
-            case self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_TACIT.value:
-                return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_TACIT
-            case self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_FS_REC.value:
-                return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_FS_REC
-            case self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_INCD.value:
-                return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_INCD
-            case self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_INCD_FAT.value:
-                return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_INCD_FAT
-            case self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_EXFAT.value:
-                return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_EXFAT
-            case self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_PSFS.value:
-                return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_PSFS
-            case self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_GPFS.value:
-                return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_GPFS
-            case self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_NPFS.value:
-                return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_NPFS
-            case self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_MSFS.value:
-                return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_MSFS
-            case self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_CSVFS.value:
-                return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_CSVFS
-            case self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_REFS.value:
-                return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_REFS
-            case self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_OPENAFS.value:
-                return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_OPENAFS
-            case self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_CIMFS.value:
-                return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_CIMFS
+        if self.FileSystemType == self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_UNKNOWN.value:
+            return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_UNKNOWN
+        elif self.FileSystemType == self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_RAW.value:
+            return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_RAW
+        elif self.FileSystemType == self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_NTFS.value:
+            return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_NTFS
+        elif self.FileSystemType == self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_FAT.value:
+            return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_FAT
+        elif self.FileSystemType == self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_CDFS.value:
+            return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_CDFS
+        elif self.FileSystemType == self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_UDFS.value:
+            return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_UDFS
+        elif self.FileSystemType == self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_LANMAN.value:
+            return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_LANMAN
+        elif self.FileSystemType == self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_WEBDAV.value:
+            return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_WEBDAV
+        elif self.FileSystemType == self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_RDPDR.value:
+            return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_RDPDR
+        elif self.FileSystemType == self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_NFS.value:
+            return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_NFS
+        elif (
+            self.FileSystemType == self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_MS_NETWARE.value
+        ):
+            return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_MS_NETWARE
+        elif self.FileSystemType == self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_NETWARE.value:
+            return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_NETWARE
+        elif self.FileSystemType == self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_BSUDF.value:
+            return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_BSUDF
+        elif self.FileSystemType == self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_MUP.value:
+            return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_MUP
+        elif self.FileSystemType == self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_RSFX.value:
+            return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_RSFX
+        elif (
+            self.FileSystemType == self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_ROXIO_UDF1.value
+        ):
+            return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_ROXIO_UDF1
+        elif (
+            self.FileSystemType == self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_ROXIO_UDF2.value
+        ):
+            return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_ROXIO_UDF2
+        elif (
+            self.FileSystemType == self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_ROXIO_UDF3.value
+        ):
+            return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_ROXIO_UDF3
+        elif self.FileSystemType == self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_TACIT.value:
+            return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_TACIT
+        elif self.FileSystemType == self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_FS_REC.value:
+            return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_FS_REC
+        elif self.FileSystemType == self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_INCD.value:
+            return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_INCD
+        elif self.FileSystemType == self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_INCD_FAT.value:
+            return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_INCD_FAT
+        elif self.FileSystemType == self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_EXFAT.value:
+            return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_EXFAT
+        elif self.FileSystemType == self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_PSFS.value:
+            return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_PSFS
+        elif self.FileSystemType == self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_GPFS.value:
+            return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_GPFS
+        elif self.FileSystemType == self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_NPFS.value:
+            return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_NPFS
+        elif self.FileSystemType == self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_MSFS.value:
+            return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_MSFS
+        elif self.FileSystemType == self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_CSVFS.value:
+            return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_CSVFS
+        elif self.FileSystemType == self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_REFS.value:
+            return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_REFS
+        elif self.FileSystemType == self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_OPENAFS.value:
+            return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_OPENAFS
+        elif self.FileSystemType == self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_CIMFS.value:
+            return self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_CIMFS
 
 
 @dataclass
@@ -381,6 +500,12 @@ class FLT_INSTANCE:
     TransactionContexts: ...
     TrackCompletionNodes: ...
     CallbackNodes: ...
+
+    def __init__(self, address: int) -> None:
+        self.address = address
+
+    def __repr__(self) -> str:
+        return f"<{hex(self.address)}>"
 
 
 @dataclass
