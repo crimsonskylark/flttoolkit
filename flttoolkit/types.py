@@ -16,6 +16,8 @@ _INTERNAL_NT_DEVICE_OBJ: Any = _INTERNAL_NT.type("_DEVICE_OBJECT")
 _INTERNAL_NT_UNICODE_STRING: Any = _INTERNAL_NT.type("_UNICODE_STRING")
 _INTERNAL_NT_ERESOURCE: Any = _INTERNAL_NT.type("_ERESOURCE")
 
+_INTERNAL_SIZE_OF_WCHAR: int = 2
+
 
 class FLT_OBJECT:
     class _FLT_OBJECT_FLAGS(Enum):
@@ -139,11 +141,6 @@ class FLT_OBJECT:
         for obj in obj_list:
             cb(obj)
 
-    def __eq__(self, other: "FLT_OBJECT") -> bool:
-        if not isinstance(other, FLT_OBJECT):
-            return False
-        return self._addr == other._addr
-
 
 @dataclass
 class FLT_VOLUME:
@@ -203,6 +200,7 @@ class FLT_VOLUME:
 
     def __init__(self, address: int) -> None:
         self._flt: typedVar = typedVar(_INTERNAL_FLT_VOLUME, address)
+        self._addr: int = address
         self._Base: FLT_OBJECT = FLT_OBJECT(int(self._flt.Base))
 
     @property
@@ -301,6 +299,12 @@ class FLT_VOLUME:
     def SupportedFeatures(self) -> int:
         return int(self._flt.SupportedFeatures)
 
+    def __hash__(self) -> int:
+        return hash((self._addr, self.DeviceName, self.DeviceObject))
+
+    def __repr__(self) -> str:
+        return f"FLT_VOLUME({hex(int(self._addr))})"
+
     def get_base(self) -> FLT_OBJECT:
         return self._Base
 
@@ -316,19 +320,19 @@ class FLT_VOLUME:
 
     def get_device_name(self) -> str:
         name: typedVar = typedVar(_INTERNAL_NT_UNICODE_STRING, self.DeviceName)
-        return f"{loadWChars(name.Buffer, name.Length * 2)}"
+        return f"{loadWChars(name.Buffer, name.Length * _INTERNAL_SIZE_OF_WCHAR)}"
 
     def get_guid_name(self) -> str:
         name: typedVar = typedVar(_INTERNAL_NT_UNICODE_STRING, self.GuidName)
-        return f"{loadWChars(name.Buffer, name.Length * 2)}"
+        return f"{loadWChars(name.Buffer, name.Length * _INTERNAL_SIZE_OF_WCHAR)}"
 
     def get_cdo_device_name(self) -> str:
         name: typedVar = typedVar(_INTERNAL_NT_UNICODE_STRING, self.CDODeviceName)
-        return f"{loadWChars(name.Buffer, name.Length * 2)}"
+        return f"{loadWChars(name.Buffer, name.Length * _INTERNAL_SIZE_OF_WCHAR)}"
 
     def get_cdo_driver_name(self) -> str:
         name: typedVar = typedVar(_INTERNAL_NT_UNICODE_STRING, self.CDODriverName)
-        return f"{loadWChars(name.Buffer, name.Length * 2)}"
+        return f"{loadWChars(name.Buffer, name.Length * _INTERNAL_SIZE_OF_WCHAR)}"
 
     def get_instance_list(self) -> List["FLT_INSTANCE"]:
         return [
@@ -350,7 +354,18 @@ class FLT_VOLUME:
         raise NotImplementedError("unimplemented")
 
     def get_tx_vol_contexts(self) -> None:
-        raise NotImplementedError("unimplemented")
+        def _walk_splay_tree(node: int, results: List[int] = []) -> List[int]:
+            if not node:
+                return results
+
+            results.append(node)
+
+            curr_node: typedVar = typedVar("fltmgr!_RTL_SPLAY_LINKS", int(node))
+
+            _walk_splay_tree(curr_node.LeftChild, results)
+            _walk_splay_tree(curr_node.RightChild, results)
+
+        return _walk_splay_tree(self._flt.TxVolContexts.Tree, [])
 
     def get_fs_type(self) -> _FLT_FILESYSTEM_TYPE:
         if self.FileSystemType == self._FLT_FILESYSTEM_TYPE.FLT_FSTYPE_UNKNOWN.value:
